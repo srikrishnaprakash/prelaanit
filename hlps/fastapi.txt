@@ -1,0 +1,51 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
+# (Assuming get_db and UserService model are imported)
+
+router = APIRouter()
+
+@router.put("/services/{service_id}")
+def update_user_services(
+    service_id: int, 
+    payload: UserServiceUpdateSchema, 
+    db: Session = Depends(get_db)
+):
+    # 1. Fetch the existing record
+    db_service = db.query(UserService).filter(UserService.id == service_id).first()
+    if not db_service:
+        raise HTTPException(status_code=404, detail="Service record not found")
+
+    # 2. Check if React sent an outdated version before even hitting the DB update step
+    if db_service.version != payload.current_version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Data was modified by another user. Please refresh and try again."
+        )
+
+    # 3. Map new data onto the object
+    db_service.servicenumber1 = payload.servicenumber1
+    db_service.servicedescription1 = payload.servicedescription1
+    db_service.servicenumber2 = payload.servicenumber2
+    db_service.servicedescription2 = payload.servicedescription2
+    db_service.servicenumber3 = payload.servicenumber3
+    db_service.servicedescription3 = payload.servicedescription3
+
+    try:
+        # 4. Attempt to save. SQLAlchemy automatically checks the version in the WHERE clause:
+        # UPDATE user_services SET ... WHERE id = :id AND version = :current_version
+        db.commit()
+        db.refresh(db_service)
+        
+    except StaleDataError:
+        # 5. Handle race condition if someone saved a change milliseconds before this commit
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict detected: This record has been updated by another process."
+        )
+
+    return {
+        "message": "Update successful", 
+        "new_version": db_service.version  # Send back the new version incremented by SQLAlchemy
+    }

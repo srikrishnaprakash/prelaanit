@@ -1,0 +1,11 @@
+Customer Add screen
+Reminder screen
+Admin screen -
+    Annual amount limit
+    Request Amount limit for each service(Max amount per year)
+    Allowed services - EB, water etc
+    Allowed payment modes 
+    Service fee  for each service - default charge
+    Service fee (Credit ) for each service - default charge
+    Discount percentage
+    discount period (day, week, month )

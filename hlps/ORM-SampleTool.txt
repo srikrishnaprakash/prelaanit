@@ -1,0 +1,148 @@
+from datetime import datetime, timezone
+from typing import Optional
+from sqlalchemy import ForeignKey, String, Boolean, DateTime
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(100))
+    is_google_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    # One-to-one relationship to the credentials table
+    # uselist=False ensures it behaves as a single object, not a list
+    credential: Mapped[Optional["UserCredential"]] = relationship(
+        "UserCredential", back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+
+class UserCredential(Base):
+    __tablename__ = "user_credentials"
+
+    # The primary key is also the foreign key to the users table
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", on_delete="cascade"), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    # Back-reference to the User model
+    user: Mapped["User"] = relationship("User", back_populates="credential")
+API Router
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, EmailStr
+# (Assume get_db, get_password_hash, verify_password, and models are imported)
+
+router = APIRouter()
+
+class UserRegisterSchema(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+
+class UserLoginSchema(BaseModel):
+    email: EmailStr
+    password: str
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserRegisterSchema, db: Session = Depends(get_db)):
+    # 1. Check if email is already taken
+    existing_user = db.query(User).filter(User.email == payload.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # 2. Create the User profile object
+    new_user = User(
+        email=payload.email,
+        full_name=payload.full_name,
+        is_google_user=False
+    )
+    
+    # 3. Hash the password and attach it to the profile using the relationship
+    hashed_password = get_password_hash(payload.password)
+    new_user.credential = UserCredential(password_hash=hashed_password)
+
+    # 4. Save to DB (SQLAlchemy handles both tables seamlessly because of cascade/relationship)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {"message": "User registered successfully", "user_id": new_user.id}
+
+
+@router.post("/login")
+def login_user(payload: UserLoginSchema, db: Session = Depends(get_db)):
+    # 1. Fetch user by email (do not use a JOIN here yet to keep it fast)
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+
+    # 2. Check if they are a Google-only user attempting a password login
+    if user.is_google_user and not user.credential:
+        raise HTTPException(
+            status_code=400, 
+            detail="This account uses Google Login. Please sign in with Google."
+        )
+
+    # 3. Verify password against the separate credential record
+    if not verify_password(payload.password, user.credential.password_hash):
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+
+    # 4. Success (Proceed to generate your JWT token)
+    return {"message": "Login successful", "token_type": "bearer", "access_token": "YOUR_JWT_TOKEN"}
+
+
+from datetime import datetime, timezone
+from typing import Optional
+from sqlalchemy import ForeignKey, String, Integer, DateTime, CheckConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+class Base(DeclarativeBase):
+    pass
+
+class UserService(Base):
+    __tablename__ = "user_services"
+
+    # Explicit configuration for Optimistic Locking
+    __mapper_args__ = {
+        "version_id_col": mapped_column("version", Integer, default=1, nullable=False)
+    }
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", on_delete="cascade"), nullable=False)
+
+    servicenumber1: Mapped[str] = mapped_column(String(18), nullable=False)
+    servicedescription1: Mapped[Optional[str]] = mapped_column(String(15))
+
+    servicenumber2: Mapped[Optional[str]] = mapped_column(String(18))
+    servicedescription2: Mapped[Optional[str]] = mapped_column(String(15))
+
+    servicenumber3: Mapped[Optional[str]] = mapped_column(String(18))
+    servicedescription3: Mapped[Optional[str]] = mapped_column(String(15))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    # Note: 'version' column is managed entirely by the __mapper_args__ block above.
+
+    __table_args__ = (
+        CheckConstraint("servicenumber1 LIKE '0%'", name="chk_servicenumber1"),
+        CheckConstraint("servicenumber2 IS NULL OR servicenumber2 LIKE '0%'", name="chk_servicenumber2"),
+        CheckConstraint("servicenumber3 IS NULL OR servicenumber3 LIKE '0%'", name="chk_servicenumber3"),
+    )
